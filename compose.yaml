@@ -1,58 +1,84 @@
-name: hive-homework3
-x-hive: &hive
+name: mts-hdfs
+x-hadoop: &hadoop
   build: .
-  image: hive-homework3:4.0.0-alpha-2
-  volumes:
-    - warehouse:/warehouse
-    - ./data:/input:ro
-    - ./sql:/sql:ro
+  image: mts-hadoop:3.4.1
+  init: true
+  networks: [hadoop]
+  restart: unless-stopped
 services:
-  postgres:
-    image: postgres:14.15
-    environment:
-      POSTGRES_DB: metastore
-      POSTGRES_USER: hive
-      POSTGRES_PASSWORD: hive_lab_only
-    volumes:
-      - postgres:/var/lib/postgresql/data
+  namenode:
+    <<: *hadoop
+    hostname: namenode
+    command: [namenode]
+    volumes: ["name:/data/name"]
+    ports: ["${BIND_IP:-127.0.0.1}:9870:9870"]
     healthcheck:
-      test: [CMD-SHELL, "pg_isready -U hive -d metastore"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-  schema:
-    <<: *hive
-    command: [schema]
-    depends_on:
-      postgres:
-        condition: service_healthy
-  metastore:
-    <<: *hive
-    command: [metastore]
-    depends_on:
-      schema:
-        condition: service_completed_successfully
-    healthcheck:
-      test: [CMD, bash, -c, "echo > /dev/tcp/localhost/9083"]
+      test: [CMD, curl, -fsS, "http://localhost:9870/jmx"]
       interval: 10s
       timeout: 5s
       retries: 30
       start_period: 30s
-  hiveserver2:
-    <<: *hive
-    command: [hiveserver2]
-    ports:
-      - "127.0.0.1:10000:10000"
-      - "127.0.0.1:10002:10002"
+  secondary:
+    <<: *hadoop
+    hostname: secondary
+    command: [secondary]
+    volumes: ["secondary:/data/secondary"]
+    ports: ["${BIND_IP:-127.0.0.1}:9868:9868"]
     depends_on:
-      metastore:
-        condition: service_healthy
+      namenode: {condition: service_healthy}
     healthcheck:
-      test: [CMD-SHELL, "beeline -u jdbc:hive2://localhost:10000/default -n hive --silent=true -e 'SELECT 1' >/dev/null 2>&1"]
-      interval: 15s
-      timeout: 30s
+      test: [CMD, curl, -fsS, "http://localhost:9868/jmx"]
+      interval: 10s
+      timeout: 5s
       retries: 30
-      start_period: 60s
+  datanode1:
+    <<: *hadoop
+    hostname: datanode1
+    command: [datanode]
+    environment: {WEB_PORT: "9864"}
+    volumes: ["data1:/data/datanode"]
+    ports: ["${BIND_IP:-127.0.0.1}:9864:9864"]
+    depends_on:
+      namenode: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, curl, -fsS, "http://localhost:9864/jmx"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+  datanode2:
+    <<: *hadoop
+    hostname: datanode2
+    command: [datanode]
+    environment: {WEB_PORT: "9865"}
+    volumes: ["data2:/data/datanode"]
+    ports: ["${BIND_IP:-127.0.0.1}:9865:9865"]
+    depends_on:
+      namenode: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, curl, -fsS, "http://localhost:9865/jmx"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+  datanode3:
+    <<: *hadoop
+    hostname: datanode3
+    command: [datanode]
+    environment: {WEB_PORT: "9866"}
+    volumes: ["data3:/data/datanode"]
+    ports: ["${BIND_IP:-127.0.0.1}:9866:9866"]
+    depends_on:
+      namenode: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, curl, -fsS, "http://localhost:9866/jmx"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
 volumes:
-  postgres:
-  warehouse:
+  name:
+  secondary:
+  data1:
+  data2:
+  data3:
+networks:
+  hadoop:
+    name: mts-hadoop
