@@ -1,110 +1,79 @@
-# Домашнее задание №3: Apache Hive
+# Задание 2. YARN и публикация веб-интерфейсов
 
-Автоматизированное развертывание **Apache Hive 4.0.0-alpha-2**, работа нескольких JDBC-клиентов и повторяемая загрузка CSV в партиционированную таблицу. Все команды выполняются из корня репозитория.
+Hadoop YARN 3.4.1 поверх HDFS из ветки `module-1-hdfs`: ResourceManager, три NodeManager и MapReduce JobHistory Server. ShuffleHandler включен в каждом NodeManager; агрегация логов и история MapReduce хранятся в существующем HDFS.
 
-## Архитектура
+## Предпосылки
 
-Клиенты Beeline → HiveServer2 (10000/TCP) → отдельный Thrift Metastore (9083/TCP) → PostgreSQL (5432/TCP).
+Docker с Linux containers, Compose v2.20+, Python 3.9+, работающий HDFS из задания 1 на **том же Docker-хосте**, сеть `mts-hadoop`. Для обоих заданий вместе рекомендуется 4 CPU, 12 ГБ RAM и 20 ГБ диска. Каждый NodeManager объявляет 3072 МБ и 2 vcore; это лимит планировщика, а не резервирование памяти Docker. Если ресурсов мало, увеличьте доступную Docker память либо уменьшите ресурсы заданий согласованно с YARN.
 
-Метаданные хранятся в PostgreSQL, файлы таблиц — в именованном томе `warehouse`, смонтированном по одинаковому пути `/warehouse` в сервисах Hive. Встроенная Derby не используется. Отдельный одноразовый сервис `schema` инициализирует схему PostgreSQL до запуска metastore; при повторном запуске проверяет существующую схему. JDBC-драйвер PostgreSQL включается в образ при сборке.
+## Запуск двух заданий
 
-Это учебная установка на одном Docker-хосте: файловая система `file:///`, выполнение MapReduce в local mode, без HDFS/YARN. Несколько клиентских сессий обслуживает HiveServer2. Local mode ограничивает масштабирование вычислений, но не число JDBC-подключений. Все контейнеры, работающие с таблицами, видят общий том. Для нескольких физических узлов потребуется общее распределенное хранилище, например HDFS.
-
-## Требования
-
-- Docker Engine с Compose v2.20+ либо Docker Desktop в режиме Linux containers.
-- Python 3.9+ без дополнительных пакетов.
-- Рекомендуется выделить Docker не менее 6 ГБ RAM, 2 CPU и 10 ГБ диска.
-- Доступ к Docker Hub и Maven Central при первой сборке; свободные порты 10000 и 10002.
-- На Windows сначала запустите Docker Desktop и дождитесь готовности Linux Engine.
-
-## Полный автоматический запуск
+Храните ветки в разных папках: так переключение ветки не изменит файлы уже запущенного Compose-проекта.
 
 ```sh
-python scripts/lab.py up
-python scripts/lab.py verify
+git clone --branch module-1-hdfs --single-branch https://github.com/abbos-trnv/mts_module_3.git hdfs-cluster
+git clone --branch module-2-yarn --single-branch https://github.com/abbos-trnv/mts_module_3.git yarn-cluster
+cd hdfs-cluster
+python lab.py up
+cd ../yarn-cluster
+python lab.py up
 ```
 
-На Linux при необходимости используйте `python3`. Первая команда собирает образ, поднимает PostgreSQL, инициализирует схему, запускает metastore и HiveServer2 и ожидает успешного SQL-запроса. Таймаут — 900 секунд. При ошибке команда завершается ненулевым кодом; диагностика: `python scripts/lab.py logs`.
+На Linux при необходимости `python3`. Если HDFS уже запущен, нужны только последняя папка и команда. Сборка использует такой же Hadoop-образ и генератор конфигурации, как в задании 1. YARN подключается к существующему `hdfs://namenode:8020`, новый HDFS не создает. До запуска создаются каталоги истории и агрегированных логов HDFS. Веб-готовность каждого сервиса проверяется Compose.
 
-Вторая команда дважды загружает данные, проверяет точный список партиций и запускает два независимых процесса Beeline с пользователями `alice` и `bob` через пул из двух потоков. Каждый клиент выполняет агрегацию и должен получить:
+`lab.py up` также выполняет автоматическую проверку: ожидает ровно три RUNNING NodeManager, загружает уникальный входной файл в HDFS, запускает пример wordcount через MapReduce **под YARN**, проверяет результат `hadoop=2, yarn=1` в HDFS и успешный статус приложения в ResourceManager. Проверяет доступность сервера истории. При ошибке команда возвращает ненулевой код; при успехе выводит PASS. Временные данные теста удаляются.
+
+## Веб-интерфейсы
+
+- ResourceManager — http://localhost:8088/ (приложения, очереди, NodeManager).
+- NodeManager 1 — http://localhost:8042/.
+- NodeManager 2 — http://localhost:8043/.
+- NodeManager 3 — http://localhost:8044/.
+- MapReduce JobHistory Server — http://localhost:19888/ (завершенные MapReduce jobs).
+- NameNode — http://localhost:9870/, Secondary — http://localhost:9868/, DataNode — порты 9864, 9865, 9866 из задания 1.
+
+JobHistory Server показывает историю MapReduce; это не Spark History Server. ResourceManager показывает приложения всех поддерживаемых типов. Вспомогательный ShuffleHandler — сетевой сервис переноса map-output, отдельной административной веб-страницы у него нет.
+
+## Доступ с другого компьютера
+
+1. Скопируйте `.env.example` в `.env` и задайте `BIND_IP` равным реальному LAN/VPN-IP Docker-хоста. При необходимости так же настройте HDFS-ветку.
+2. Повторите `python lab.py up`. Compose опубликует порты демонов на выбранном интерфейсе хоста. По умолчанию используется 127.0.0.1, поэтому удаленный доступ без этого шага закрыт.
+3. Разрешите TCP 8088, 8042–8044, 19888 в firewall для компьютера проверяющего. Для HDFS UI — также 9870, 9868, 9864–9866. В облаке настройте разрешения провайдера.
+4. На внешнем клиенте добавьте в hosts запись, заменив IP на адрес Docker-хоста:
 
 ```text
-2026-10-22  2  1200.00
-2026-10-23  2  860.00
+192.168.1.10 namenode secondary datanode1 datanode2 datanode3 resourcemanager nodemanager1 nodemanager2 nodemanager3 historyserver
 ```
 
-После успешных проверок выводится `PASS`. Ошибки SQL, отличающиеся результаты или отсутствие партиций приводят к ненулевому коду завершения. Одновременные процессы демонстрируют работу двух сессий; имена пользователей в режиме NONE не проверяются сервером.
+5. Откройте `http://resourcemanager:8088/`, `http://nodemanager1:8042/`, `http://nodemanager2:8043/`, `http://nodemanager3:8044/`, `http://historyserver:19888/`. Прямой доступ по IP и нужному порту тоже работает, но hosts нужен для внутренних ссылок UI. На Docker-хосте можно сопоставить эти имена с 127.0.0.1.
 
-## Как устроена загрузка
+Работающий ApplicationMaster использует динамический порт; для активного приложения переходите через `/proxy/<application_id>/` ResourceManager. Прямой доступ к произвольному внутреннему адресу контейнера снаружи не гарантируется. Завершенный MapReduce job доступен через JobHistory Server и постоянный порт 19888.
+
+Hadoop здесь без Kerberos и TLS. Публикуйте UI только в доверенную учебную LAN/VPN, ограничив источники firewall. Не открывайте административные интерфейсы в общедоступный Интернет. Репозиторий содержит автоматизацию публикации портов; публичный сервер и публичный IP он не создает.
+
+## Проверка и диагностика
 
 ```sh
-python scripts/lab.py load
+python lab.py verify
+docker compose exec resourcemanager yarn node -list -all
+docker compose exec resourcemanager yarn application -list -appStates ALL
+python lab.py logs
 ```
 
-Скрипт выполняет `sql/load.sql` через JDBC. Он создает БД `homework`, таблицу `sales`, партиционированную по строковому полю `dt`, и загружает два CSV из `data/` в статические партиции `dt=2026-10-22` и `dt=2026-10-23`.
+В ResourceManager должно быть три здоровых RUNNING узла, приложение `word count` — FINISHED/SUCCEEDED. По application ID можно получить логи: `docker compose exec resourcemanager yarn logs -applicationId <ID>`. Если задача остается ACCEPTED, проверьте свободные ресурсы и настройки очереди. Если нет NodeManager, проверьте сеть `mts-hadoop`, журнал RM/NM и совпадение версии образа. Ошибки записи history/logs требуют проверки HDFS и прав каталогов.
 
-CSV без заголовков: `sale_id,product,quantity,price`. Значения не содержат запятых и кавычек; используется простой разделитель, не полноценный CSV-парсер. Поле даты не повторяется в файлах: оно задается в `PARTITION`.
-
-`LOAD DATA LOCAL` читает файл **в контейнере HiveServer2**, где каталог `data/` доступен как `/input`, и копирует его в warehouse. `OVERWRITE` заменяет содержимое соответствующей партиции, поэтому повторная загрузка не удваивает строки. Исходные CSV остаются на месте. Независимые загрузчики не должны одновременно перезаписывать одну партицию: это пример пакетной последовательной загрузки, не транзакционный ingestion.
-
-Для нового дня добавьте CSV и соответствующий `LOAD DATA ... PARTITION (dt='YYYY-MM-DD')` в SQL. Не запускайте `verify` на измененном наборе данных без изменения ожидаемых результатов.
-
-## Подключение клиентов вручную
-
-В двух терминалах выполните соответственно:
+## Остановка
 
 ```sh
-docker compose exec hiveserver2 beeline -u jdbc:hive2://localhost:10000/homework -n alice
-docker compose exec hiveserver2 beeline -u jdbc:hive2://localhost:10000/homework -n bob
+python lab.py down
+cd ../hdfs-cluster
+python lab.py down
 ```
 
-В каждой сессии можно выполнить:
+Останавливайте YARN раньше HDFS. Результаты и история в HDFS сохраняются в томах первого задания. После перезапуска RM список прежних приложений может не сохраниться: recovery RM здесь не настроен; история завершенных MapReduce jobs доступна отдельно в JobHistory Server.
 
-```sql
-SHOW PARTITIONS sales;
-SELECT * FROM sales WHERE dt='2026-10-23';
-SELECT dt, SUM(quantity * price) FROM sales GROUP BY dt;
-```
+## Сдача и статус
 
-Внешний JDBC-клиент на компьютере с Docker использует `jdbc:hive2://localhost:10000/homework`. Веб-интерфейс: http://localhost:10002/.
+Сдайте ссылку на ветку `module-2-yarn`. Инструкция и скрипты подготовлены; полный запуск на текущем компьютере пока не подтвержден из-за недоступности Docker Linux Engine. Отдельно проверьте доступность UI именно с внешнего компьютера после настройки IP/firewall: локальная проверка этого не доказывает.
 
-## Остановка, сохранность и диагностика
-
-```sh
-python scripts/lab.py down
-python scripts/lab.py up
-```
-
-Остановка сохраняет оба именованных тома. После повторного запуска таблица и метаданные остаются доступны. Просмотр состояния: `docker compose ps -a`; журналов: `python scripts/lab.py logs`.
-
-Для полного удаления **всех данных этого стенда**, если они больше не нужны:
-
-```sh
-docker compose down -v
-```
-
-При частично инициализированной схеме сервис `schema` завершается ошибкой: не следует автоматически скрывать ошибку или удалять PostgreSQL. Для чистого учебного запуска можно явно удалить тома указанной командой; ценные данные сначала сохраните.
-
-Пароль PostgreSQL фиксированный и предназначен только для лабораторной работы. PostgreSQL и metastore не публикуются на хост, JDBC и веб-порт привязаны к 127.0.0.1. Аутентификация HiveServer2 — NONE. Не публикуйте этот стенд в Интернет. Название `EmbeddedLockManager` относится только к локальному менеджеру блокировок, а не к embedded metastore: метаданные обслуживаются отдельным сетевым сервисом.
-
-## Проверка и сдача
-
-Workflow `.github/workflows/check.yml` запускает весь стенд и проверку на GitHub Actions, сохраняет логи и останавливает контейнеры. Фактический успешный прогон подтверждается зеленым запуском workflow и сообщением `PASS`; наличие workflow само по себе не является подтверждением.
-
-При подготовке проверены синтаксис Python и конфигурация Compose. Полный контейнерный запуск в среде подготовки не выполнен: Linux Engine Docker недоступен. Перед сдачей выполните две команды из раздела полного запуска либо дождитесь успешного workflow; при сбое смотрите сохраненные логи.
-
-Разместите содержимое в публичном репозитории GitHub, убедитесь, что файлы доступны без авторизации, и отправьте ссылку на репозиторий. Через GitHub CLI из этой папки после входа в аккаунт:
-
-```sh
-git init
-git add .
-git commit -m "Add automated Hive homework 3"
-gh repo create hive-homework3 --public --source=. --push
-```
-
-## Источники
-
-- [Официальная инструкция Apache: Docker, внешний PostgreSQL и remote metastore](https://hive.apache.org/docs/latest/admin/setting-up-hive-with-docker/). Инструкция описывает 4.0.0; в этом стенде явно закреплен рекомендованный заданием образ alpha-2 и задан собственный запуск сервисов.
-- [Официальный образ Apache Hive и теги](https://hub.docker.com/r/apache/hive/tags).
-- [Архив релизов Apache Hive, включая 4.0.0-alpha-2](https://release-catalog.apache.org/hive/archive.html).
+[Официальная установка Hadoop/YARN](https://hadoop.apache.org/docs/r3.4.1/hadoop-project-dist/hadoop-common/ClusterSetup.html), [документация YARN](https://hadoop.apache.org/docs/r3.4.1/hadoop-yarn/hadoop-yarn-site/YARN.html).

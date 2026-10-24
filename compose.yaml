@@ -1,58 +1,71 @@
-name: hive-homework3
-x-hive: &hive
+name: mts-yarn
+x-hadoop: &hadoop
   build: .
-  image: hive-homework3:4.0.0-alpha-2
-  volumes:
-    - warehouse:/warehouse
-    - ./data:/input:ro
-    - ./sql:/sql:ro
+  image: mts-hadoop:3.4.1
+  init: true
+  restart: unless-stopped
+  networks: [hadoop]
 services:
-  postgres:
-    image: postgres:14.15
-    environment:
-      POSTGRES_DB: metastore
-      POSTGRES_USER: hive
-      POSTGRES_PASSWORD: hive_lab_only
-    volumes:
-      - postgres:/var/lib/postgresql/data
+  resourcemanager:
+    <<: *hadoop
+    hostname: resourcemanager
+    command: [resourcemanager]
+    ports: ["${BIND_IP:-127.0.0.1}:8088:8088"]
     healthcheck:
-      test: [CMD-SHELL, "pg_isready -U hive -d metastore"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-  schema:
-    <<: *hive
-    command: [schema]
-    depends_on:
-      postgres:
-        condition: service_healthy
-  metastore:
-    <<: *hive
-    command: [metastore]
-    depends_on:
-      schema:
-        condition: service_completed_successfully
-    healthcheck:
-      test: [CMD, bash, -c, "echo > /dev/tcp/localhost/9083"]
+      test: [CMD, curl, -fsS, "http://localhost:8088/ws/v1/cluster/info"]
       interval: 10s
       timeout: 5s
       retries: 30
-      start_period: 30s
-  hiveserver2:
-    <<: *hive
-    command: [hiveserver2]
-    ports:
-      - "127.0.0.1:10000:10000"
-      - "127.0.0.1:10002:10002"
+  nodemanager1:
+    <<: *hadoop
+    hostname: nodemanager1
+    command: [nodemanager]
+    environment: {NM_WEB_PORT: "8042"}
+    ports: ["${BIND_IP:-127.0.0.1}:8042:8042"]
     depends_on:
-      metastore:
-        condition: service_healthy
+      resourcemanager: {condition: service_healthy}
     healthcheck:
-      test: [CMD-SHELL, "beeline -u jdbc:hive2://localhost:10000/default -n hive --silent=true -e 'SELECT 1' >/dev/null 2>&1"]
-      interval: 15s
-      timeout: 30s
+      test: [CMD, curl, -fsS, "http://localhost:8042/ws/v1/node/info"]
+      interval: 10s
+      timeout: 5s
       retries: 30
-      start_period: 60s
-volumes:
-  postgres:
-  warehouse:
+  nodemanager2:
+    <<: *hadoop
+    hostname: nodemanager2
+    command: [nodemanager]
+    environment: {NM_WEB_PORT: "8043"}
+    ports: ["${BIND_IP:-127.0.0.1}:8043:8043"]
+    depends_on:
+      resourcemanager: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, curl, -fsS, "http://localhost:8043/ws/v1/node/info"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+  nodemanager3:
+    <<: *hadoop
+    hostname: nodemanager3
+    command: [nodemanager]
+    environment: {NM_WEB_PORT: "8044"}
+    ports: ["${BIND_IP:-127.0.0.1}:8044:8044"]
+    depends_on:
+      resourcemanager: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, curl, -fsS, "http://localhost:8044/ws/v1/node/info"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+  historyserver:
+    <<: *hadoop
+    hostname: historyserver
+    command: [historyserver]
+    ports: ["${BIND_IP:-127.0.0.1}:19888:19888"]
+    healthcheck:
+      test: [CMD, curl, -fsS, "http://localhost:19888/ws/v1/history/info"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+networks:
+  hadoop:
+    external: true
+    name: mts-hadoop
