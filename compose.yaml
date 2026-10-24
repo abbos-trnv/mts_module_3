@@ -1,20 +1,27 @@
-name: hive-homework3
+name: mts-spark
 x-hive: &hive
-  build: .
-  image: hive-homework3:4.0.0-alpha-2
-  volumes:
-    - warehouse:/warehouse
-    - ./data:/input:ro
-    - ./sql:/sql:ro
+  build: ./hive
+  image: mts-hive-hdfs:4.0.0-alpha-2
+  init: true
+  networks: [hadoop]
+  environment:
+    METASTORE_PASSWORD: "${METASTORE_PASSWORD:?Run python lab.py up first}"
 services:
-  postgres:
+  spark:
+    build: .
+    image: mts-spark:3.5.7
+    hostname: spark-client
+    profiles: [tools]
+    networks: [hadoop]
+    command: [spark-submit, --version]
+  spark-postgres:
     image: postgres:14.15
     environment:
       POSTGRES_DB: metastore
       POSTGRES_USER: hive
-      POSTGRES_PASSWORD: hive_lab_only
-    volumes:
-      - postgres:/var/lib/postgresql/data
+      POSTGRES_PASSWORD: "${METASTORE_PASSWORD:?Run python lab.py up first}"
+    networks: [hadoop]
+    volumes: ["postgres:/var/lib/postgresql/data"]
     healthcheck:
       test: [CMD-SHELL, "pg_isready -U hive -d metastore"]
       interval: 5s
@@ -24,35 +31,33 @@ services:
     <<: *hive
     command: [schema]
     depends_on:
-      postgres:
-        condition: service_healthy
-  metastore:
+      spark-postgres: {condition: service_healthy}
+  spark-metastore:
     <<: *hive
     command: [metastore]
     depends_on:
-      schema:
-        condition: service_completed_successfully
+      schema: {condition: service_completed_successfully}
     healthcheck:
       test: [CMD, bash, -c, "echo > /dev/tcp/localhost/9083"]
       interval: 10s
       timeout: 5s
       retries: 30
       start_period: 30s
-  hiveserver2:
+  spark-hiveserver2:
     <<: *hive
     command: [hiveserver2]
-    ports:
-      - "127.0.0.1:10000:10000"
-      - "127.0.0.1:10002:10002"
+    ports: ["127.0.0.1:10010:10000", "127.0.0.1:10012:10002"]
     depends_on:
-      metastore:
-        condition: service_healthy
+      spark-metastore: {condition: service_healthy}
     healthcheck:
-      test: [CMD-SHELL, "beeline -u jdbc:hive2://localhost:10000/default -n hive --silent=true -e 'SELECT 1' >/dev/null 2>&1"]
+      test: [CMD-SHELL, "beeline -u jdbc:hive2://localhost:10000/default -n root --silent=true -e 'SELECT 1' >/dev/null 2>&1"]
       interval: 15s
       timeout: 30s
       retries: 30
       start_period: 60s
 volumes:
   postgres:
-  warehouse:
+networks:
+  hadoop:
+    external: true
+    name: mts-hadoop

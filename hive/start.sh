@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+: "${METASTORE_PASSWORD:?Password must be supplied through the local .env file}"
+[[ "$METASTORE_PASSWORD" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo 'Invalid password format' >&2; exit 1; }
+template=$(cat /opt/hive/conf/hive-site.xml.template)
+printf '%s\n' "${template//__METASTORE_PASSWORD__/$METASTORE_PASSWORD}" > /opt/hive/conf/hive-site.xml
 case "${1:-}" in
   schema)
     # An existing version must validate; a partially initialized DB must fail.
